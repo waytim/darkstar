@@ -4,18 +4,18 @@ require("scripts/globals/status")
 require("scripts/globals/utils")
 
 -- Foreword: A lot of this is good estimating since the FFXI playerbase has not found all of info for individual moves.
---			What is known is that they roughly follow player Weaponskill calculations (pDIF, dMOD, ratio, etc) so this is what
---			this set of functions emulates.
+--            What is known is that they roughly follow player Weaponskill calculations (pDIF, dMOD, ratio, etc) so this is what
+--            this set of functions emulates.
 
 -- mob types
 -- used in mob:isMobType()
-MOBTYPE_NORMAL			= 0x00;
-MOBTYPE_PCSPAWNED		= 0x01;
-MOBTYPE_NOTORIOUS		= 0x02;
-MOBTYPE_FISHED			= 0x04;
-MOBTYPE_CALLED			= 0x08;
-MOBTYPE_BATTLEFIELD		= 0x10;
-MOBTYPE_EVENT			= 0x20;
+MOBTYPE_NORMAL            = 0x00;
+MOBTYPE_PCSPAWNED        = 0x01;
+MOBTYPE_NOTORIOUS        = 0x02;
+MOBTYPE_FISHED            = 0x04;
+MOBTYPE_CALLED            = 0x08;
+MOBTYPE_BATTLEFIELD        = 0x10;
+MOBTYPE_EVENT            = 0x20;
 
 --skilltype
 MOBSKILL_PHYSICAL = 0;
@@ -30,6 +30,10 @@ MOBPARAM_BLUNT = 1;
 MOBPARAM_SLASH = 2;
 MOBPARAM_PIERCE = 3;
 MOBPARAM_H2H = 4;
+
+MOBDRAIN_HP = 0;
+MOBDRAIN_MP = 1;
+MOBDRAIN_TP = 2;
 
 --skillparam (MAGICAL)
 -- this is totally useless and should be removed
@@ -78,6 +82,7 @@ MSG_DAMAGE = 185; -- player uses, target takes 10 damage. DEFAULT
 MSG_MISS = 188;
 MSG_RESIST = 85;
 MSG_EFFECT_DRAINED = 370; -- <num> status effects are drained from <target>.
+MSG_ATTR_DRAINED = 369;
 MSG_TP_REDUCED = 362; -- tp reduced to
 MSG_DISAPPEAR = 159; -- <target>'s stun effect disappears!
 MSG_DISAPPEAR_NUM = 231; -- <num> of <target>'s effects disappear!
@@ -85,8 +90,8 @@ MSG_DISAPPEAR_NUM = 231; -- <num> of <target>'s effects disappear!
 BOMB_TOSS_HPP = 1;
 
 function MobRangedMove(mob,target,skill,numberofhits,accmod,dmgmod, tpeffect)
-	-- this will eventually contian ranged attack code
-	return MobPhysicalMove(mob,target,skill,numberofhits,accmod,dmgmod, TP_RANGED);
+    -- this will eventually contian ranged attack code
+    return MobPhysicalMove(mob,target,skill,numberofhits,accmod,dmgmod, TP_RANGED);
 end;
 
 -- PHYSICAL MOVE FUNCTION
@@ -120,6 +125,10 @@ function MobPhysicalMove(mob,target,skill,numberofhits,accmod,dmgmod,tpeffect,mt
     local lvltarget = target:getMainLvl();
     local acc = mob:getACC();
     local eva = target:getEVA();
+    if (target:hasStatusEffect(EFFECT_YONIN) and mob:isFacing(target, 23)) then -- Yonin evasion boost if mob is facing target
+        eva = eva + target:getStatusEffect(EFFECT_YONIN):getPower();
+    end
+
     --apply WSC
     local base = mob:getWeaponDmg() + dstr; --todo: change to include WSC
     if (base < 1) then
@@ -153,7 +162,11 @@ function MobPhysicalMove(mob,target,skill,numberofhits,accmod,dmgmod,tpeffect,mt
         hitdamage = 1;
     end
 
-    hitdamage = hitdamage * dmgmod * MobTPMod(skill:getTP());
+    hitdamage = hitdamage * dmgmod;
+
+    if (tpeffect == TP_DMG_VARIES) then
+        hitdamage = hitdamage * MobTPMod(skill:getTP() / 10);
+    end
 
     --work out min and max cRatio
     local maxRatio = 1;
@@ -278,8 +291,12 @@ function MobMagicalMove(mob,target,skill,damage,element,dmgmod,tpeffect,tpvalue)
     --get all the stuff we need
     local resist = 1;
 
+    local mdefBarBonus = 0;
+    if (element > 0 and element <= 6 and target:hasStatusEffect(barSpells[element])) then -- bar- spell magic defense bonus
+        mdefBarBonus = target:getStatusEffect(barSpells[element]):getSubPower();
+    end
     -- plus 100 forces it to be a number
-    mab = (100+mob:getMod(MOD_MATT)) / (100+target:getMod(MOD_MDEF));
+    mab = (100 + mob:getMod(MOD_MATT)) / (100 + target:getMod(MOD_MDEF) + mdefBarBonus);
     
     if (mab > 1.3) then
         mab = 1.3;
@@ -290,7 +307,7 @@ function MobMagicalMove(mob,target,skill,damage,element,dmgmod,tpeffect,tpvalue)
     end
 
     if (tpeffect==TP_DMG_BONUS) then
-        damage = damage * ((skill:getTP()*tpvalue)/100);
+        damage = damage * (((skill:getTP() / 10)*tpvalue)/100);
     end
 
     -- printf("power: %f, bonus: %f", damage, mab);
@@ -298,7 +315,14 @@ function MobMagicalMove(mob,target,skill,damage,element,dmgmod,tpeffect,tpvalue)
     finaldmg = damage * mab * dmgmod;
 
     -- get resistence
-    resist = applyPlayerResistance(mob,nil,target,mob:getStat(MOD_INT)-target:getStat(MOD_INT),0,element);
+    local avatarAccBonus = 0;
+    if (mob:isPet() and mob:getMaster() ~= nil) then
+        local master = mob:getMaster();
+        if (master:getPetID() >= 0 and master:getPetID() <= 20) then -- check to ensure pet is avatar
+            avatarAccBonus = utils.clamp(master:getSkillLevel(SKILL_SUM) - master:getMaxSkillLevel(mob:getMainLvl(), JOBS.SMN, SUMMONING_SKILL), 0, 200);
+        end
+    end
+    resist = applyPlayerResistance(mob,nil,target,mob:getStat(MOD_INT)-target:getStat(MOD_INT),avatarAccBonus,element);
 
     local magicDefense = getElementalDamageReduction(target, element);
 
@@ -387,7 +411,11 @@ function mobAddBonuses(caster, spell, target, dmg, ele)
 
     dmg = math.floor(dmg * burst);
 
-    mab = (100 + caster:getMod(MOD_MATT)) / (100 + target:getMod(MOD_MDEF)) ;
+    local mdefBarBonus = 0;
+    if (ele > 0 and ele <= 6 and target:hasStatusEffect(barSpells[ele])) then -- bar- spell magic defense bonus
+        mdefBarBonus = target:getStatusEffect(barSpells[ele]):getSubPower();
+    end
+    mab = (100 + caster:getMod(MOD_MATT)) / (100 + target:getMod(MOD_MDEF) + mdefBarBonus) ;
 
     dmg = math.floor(dmg * mab);
 
@@ -441,32 +469,26 @@ function MobBreathMove(mob, target, percent, base, element, cap)
     local damage = (mob:getHP() * percent) + (mob:getMainLvl() / base);
 
     if (cap == nil) then
-        -- super cap for high health mobs
-        if (damage > 700) then
-            damage = 700 + math.random(200);
-        end
-
         -- cap max damage
-        if (damage > mob:getHP()/5) then
-            damage = math.floor(mob:getHP()/5);
-        end
-    else
-        if (damage > cap) then
-            damage = cap;
-        end
+        cap = math.floor(mob:getHP()/5);
     end
+
+    -- Deal bonus damage vs mob ecosystem
+    local systemBonus = utils.getSystemStrengthBonus(mob, target);
+    damage = damage + (damage * (systemBonus * 0.25));
 
     -- elemental resistence
     if (element ~= nil and element > 0) then
         -- no skill available, pass nil
-        -- breath moves get a bonus accuracy because they are hard to resist
-        local resist = applyPlayerResistance(mob,nil,target,mob:getStat(MOD_INT)-target:getStat(MOD_INT),mob:getMainLvl(),element);
+        local resist = applyPlayerResistance(mob,nil,target,mob:getStat(MOD_INT)-target:getStat(MOD_INT),0,element);
 
         -- get elemental damage reduction
         local defense = getElementalDamageReduction(target, element)
 
         damage = damage * resist * defense;
     end
+
+    damage = utils.clamp(damage, 1, cap);
 
     return damage;
 end;
@@ -550,6 +572,7 @@ function MobFinalAdjustments(dmg,mob,skill,target,skilltype,skillparam,shadowbeh
     if (dmg > 0) then
         target:wakeUp();
         target:updateEnmityFromDamage(mob,dmg);
+        target:handleAfflatusMiseryDamage(dmg);
     end
 
     return dmg;
@@ -574,15 +597,122 @@ end;
 -- function MobMagicAoEHit()
 -- end;
 
+function MobDrainMove(mob, target, drainType, drain)
+
+    if (target:isUndead() == false) then
+
+        if (drainType == MOBDRAIN_MP) then
+            -- can't go over limited mp
+            if (target:getMP() < drain) then
+                drain = target:getMP();
+            end
+
+            target:delMP(drain);
+            mob:addMP(drain);
+
+            return MSG_DRAIN_MP;
+        elseif (drainType == MOBDRAIN_TP) then
+            -- can't go over limited tp
+            if (target:getTP() < drain) then
+                drain = target:getTP();
+            end
+
+            target:delTP(drain);
+            mob:addTP(drain);
+
+            return MSG_DRAIN_TP;
+        elseif (drainType == MOBDRAIN_HP) then
+            -- can't go over limited hp
+            if (target:getHP() < drain) then
+                drain = target:getHP();
+            end
+
+            target:delHP(drain);
+            mob:addHP(drain);
+
+            return MSG_DRAIN_HP;
+        end
+
+    else
+        -- it's undead so just deal damage
+        -- can't go over limited hp
+        if (target:getHP() < drain) then
+            drain = target:getHP();
+        end
+
+        target:delHP(drain);
+        return MSG_DAMAGE;
+    end
+
+    return MSG_NO_EFFECT;
+end;
+
+function MobPhysicalDrainMove(mob, target, skill, drainType, drain)
+    if (MobPhysicalHit(skill)) then
+        return MobDrainMove(mob, target, drainType, drain);
+    end
+
+    return MSG_MISS;
+end;
+
+function MobDrainAttribute(mob, target, typeEffect, power, tick, duration)
+    local positive = nil;
+    if (typeEffect == EFFECT_STR_DOWN) then
+        positive = EFFECT_STR_BOOST;
+    elseif (typeEffect == EFFECT_DEX_DOWN) then
+        positive = EFFECT_DEX_BOOST;
+    elseif (typeEffect == EFFECT_AGI_DOWN) then
+        positive = EFFECT_AGI_BOOST;
+    elseif (typeEffect == EFFECT_VIT_DOWN) then
+        positive = EFFECT_VIT_BOOST;
+    elseif (typeEffect == EFFECT_MND_DOWN) then
+        positive = EFFECT_MND_BOOST;
+    elseif (typeEffect == EFFECT_INT_DOWN) then
+        positive = EFFECT_INT_BOOST;
+    elseif (typeEffect == EFFECT_CHR_DOWN) then
+        positive = EFFECT_CHR_BOOST;
+    end
+
+    if (positive ~= nil) then
+        local results = MobStatusEffectMove(mob, target, typeEffect, power, tick, duration);
+
+        if (results == MSG_ENFEEB_IS) then
+            mob:addStatusEffect(positive, power, tick, duration);
+
+            return MSG_ATTR_DRAINED;
+        end
+
+        return MSG_MISS;
+    end
+
+    return MSG_NO_EFFECT;
+end;
+
+function MobDrainStatusEffectMove(mob, target)
+    -- try to drain buff
+    local effect = target:stealStatusEffect();
+    local dmg = 0;
+
+    if (effect ~= nil) then
+        if (mob:hasStatusEffect(effect:getType()) == false) then
+            -- add to myself
+            mob:addStatusEffect(effect:getType(), effect:getPower(), effect:getTickCount(), effect:getDuration());
+        end
+        -- add buff to myself
+        return MSG_EFFECT_DRAINED;
+    end
+
+    return MSG_NO_EFFECT;
+end;
+
 -- Adds a status effect to a target
 function MobStatusEffectMove(mob, target, typeEffect, power, tick, duration)
 
     if (target:canGainStatusEffect(typeEffect, power)) then
         local statmod = MOD_INT;
         local element = mob:getStatusEffectElement(typeEffect);
-        local bonusAcc = mob:getMainLvl() / 2;
 
-        local resist = applyPlayerResistance(mob,typeEffect,target,mob:getStat(statmod)-target:getStat(statmod),bonusAcc,element);
+        local resist = applyPlayerResistance(mob,typeEffect,target,mob:getStat(statmod)-target:getStat(statmod),0,element);
 
         if (resist >= 0.25) then
 
@@ -643,7 +773,7 @@ function MobTakeAoEShadow(mob, target, max)
 
     -- this is completely crap and should be using actual nin skill
     -- TODO fix this
-    if (target:getMainJob() == JOB_NIN and math.random() < 0.6) then
+    if (target:getMainJob() == JOBS.NIN and math.random() < 0.6) then
         max = max - 1;
         if (max < 1) then
             max = 1;
@@ -655,23 +785,23 @@ end;
 
 function MobTPMod(tp)
     -- increase damage based on tp
-    if (tp >= 300) then
+    if (tp >= 3000) then
         return 2;
-    elseif (tp >= 200) then
+    elseif (tp >= 2000) then
         return 1.5;
     end
     return 1;
 end;
 
 function fTP(tp,ftp1,ftp2,ftp3)
-    if (tp<100) then
-        tp=100;
+    if (tp<1000) then
+        tp=1000;
     end
-    if (tp>=100 and tp<150) then
-        return ftp1 + ( ((ftp2-ftp1)/50) * (tp-100));
-    elseif (tp>=150 and tp<=300) then
+    if (tp>=1000 and tp<1500) then
+        return ftp1 + ( ((ftp2-ftp1)/500) * (tp-1000));
+    elseif (tp>=1500 and tp<=3000) then
         --generate a straight line between ftp2 and ftp3 and find point @ tp
-        return ftp2 + ( ((ftp3-ftp2)/150) * (tp-150));
+        return ftp2 + ( ((ftp3-ftp2)/1500) * (tp-1500));
     end
     return 1; --no ftp mod
 end;

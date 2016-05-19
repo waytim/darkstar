@@ -45,7 +45,7 @@ typedef std::unordered_map<uint32,ModsList_t*> ModsMap_t;
 
 namespace mobutils
 {
-	void	CalculateStats(CMobEntity* PMob);
+	void  CalculateStats(CMobEntity* PMob);
         void  SetupJob(CMobEntity* PMob);
         void  SetupRoaming(CMobEntity* PMob);
         void  SetupDynamisMob(CMobEntity* PMob);
@@ -57,6 +57,10 @@ namespace mobutils
 	void  SetupPetSkills(CMobEntity* PMob);
 
 	uint16	GetWeaponDamage(CMobEntity* PMob);
+        uint16  GetMagicEvasion(CMobEntity* PMob);
+        uint16  GetEvasion(CMobEntity* PMob);
+        uint16  GetBase(CMobEntity* PMob, uint8 rank);
+        uint16  GetBaseToRank(uint8 rank, uint16 level);
 	void    GetAvailableSpells(CMobEntity* PMob);
 	void	InitializeMob(CMobEntity* PMob, CZone* PZone);
 	void	LoadCustomMods();
